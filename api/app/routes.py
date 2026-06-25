@@ -6,6 +6,8 @@ from api.app.config import MOCK_USERS, ROLE_ACCESS_MAPPING
 from rag.hybrid.hybrid_retriever import vector_hybrid_retriever
 from rag.hybrid.reranker import rerank_compression_retriever, rerank_llminvoke
 from rag.hybrid.invoke_llm import ask_hybrid
+from rag.sql.sql_chain_cleanup_run import sql_rag_chain
+from rag.sql.invoke_llm import ask_sql
 
 router = APIRouter()
 
@@ -67,6 +69,14 @@ def chat(request: Request, data: ChatRequest):
     context_empty = not answer["context"]
     llm_has_no_info = NO_INFO_PHRASE.lower() in answer["answer"].lower()
     if context_empty or llm_has_no_info:
+        # if requestor role is admin or technician then we will call the sql rag as well to get the answer
+        if role in ["admin", "billing_executive"]:
+            results = sql_rag_chain(query, llm, sql_db)
+            sql_answer = ask_sql(query, results,llm)
+            print("[debug] SQL RAG Answer → ", sql_answer)
+            if sql_answer:
+                return {"answer": sql_answer}
+
         accessible_str   = ", ".join(roles_for_user)
         inaccessible_str = ", ".join(sorted(ALL_COLLECTIONS - set(roles_for_user)))
         fallback = (
@@ -75,8 +85,6 @@ def chat(request: Request, data: ChatRequest):
         )
         return {"answer": fallback}
 
-    # print(answer["context"])
-    # print("\nANSWER:\n", answer["answer"])
     return answer
 
     # Connect to your actual RAG chain logic here
