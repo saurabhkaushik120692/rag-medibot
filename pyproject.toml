@@ -1,7 +1,7 @@
 [project]
 name = "rag-medibot"
 version = "0.1.0"
-description = "ChatBot using RAG for MediAssist"
+description = "Role-aware medical RAG chatbot for MediAssist Hospital — hybrid vector search (dense + BM25), SQL RAG for structured claims data, and collection-level access control enforced at the Qdrant retrieval layer"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
