@@ -349,7 +349,7 @@ POST /chat  { query, role }
   │  4. LLM generates answer from context   │
   └─────────────────────────────────────────┘
         │
-        ├─ Answer found? → Yes → return { answer }
+        ├─ Answer found? → Yes → return enriched response (see /chat response below)
         │
         ├─ No answer ("I don't have that information.")
         │       │
@@ -364,15 +364,17 @@ POST /chat  { query, role }
         │       │  │  3. LLM formats result as NL   │
         │       │  └───────────────────────────────┘
         │       │       │
-        │       │       ├─ SQL answer found? → return { answer }
+        │       │       ├─ SQL answer found?
+        │       │       │   → { answer, sources:[], retrieval_type:"sql_rag", role }
         │       │       │
         │       │       └─ No → fallback message
         │       │
         │       └─ Other roles → fallback message:
         │              "As a {role}, you do not have access
         │               to [{inaccessible}] documents..."
+        │              → { answer: fallback, sources:[], retrieval_type:"none", role }
         │
-        └─ return { answer }
+        └─ return { answer, sources, retrieval_type:"hybrid_rag", role }
 ```
 
 ---
@@ -401,9 +403,42 @@ POST /chat  { query, role }
 ```json
 // Request
 { "query": "What are the diagnostic criteria for diabetes?", "role": "doctor" }
+```
 
-// Response
-{ "answer": "The diagnostic criteria for diabetes are: FPG ≥ 126 mg/dL, ..." }
+**Hybrid RAG hit:**
+```json
+{
+  "answer": "The diagnostic criteria for diabetes are: FPG ≥ 126 mg/dL ...",
+  "sources": [
+    {
+      "source_document": "treatment_protocols.pdf",
+      "section_title": ["A. Type 2 Diabetes Mellitus", "Diagnostic criteria"],
+      "collection": "clinical"
+    }
+  ],
+  "retrieval_type": "hybrid_rag",
+  "role": "doctor"
+}
+```
+
+**SQL RAG hit** (admin / billing_executive only):
+```json
+{
+  "answer": "Here are the 5 cardiology claims submitted before May 2024 ...",
+  "sources": [],
+  "retrieval_type": "sql_rag",
+  "role": "admin"
+}
+```
+
+**Access denied / no information:**
+```json
+{
+  "answer": "As a doctor, you do not have access to [billing, equipment] documents ...",
+  "sources": [],
+  "retrieval_type": "none",
+  "role": "doctor"
+}
 ```
 
 ---
@@ -446,9 +481,40 @@ POST /chat  { query, role }
 
 ---
 
+## Chat Response Schema
+
+Every `/chat` response returns the following fields (defined in `api/app/models.py`):
+
+| Field | Type | Description |
+|---|---|---|
+| `answer` | `str` | LLM's natural language response |
+| `sources` | `List[SourceItem]` | Deduplicated list of retrieved source documents (empty for SQL RAG / fallback) |
+| `retrieval_type` | `str` | One of `"hybrid_rag"`, `"sql_rag"`, or `"none"` |
+| `role` | `str` | The authenticated role that made the request |
+
+`SourceItem` fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `source_document` | `str` | Filename (e.g. `treatment_protocols.pdf`) |
+| `section_title` | `List[str]` | Full heading breadcrumb (e.g. `["Type 2 Diabetes", "Diagnostic criteria"]`) |
+| `collection` | `str` | Collection the document belongs to (e.g. `clinical`) |
+
+---
+
+## Frontend Chat UI Features
+
+- Each bot message bubble shows the **retrieval type badge** (`🔍 Hybrid RAG`, `🗄️ SQL RAG`, `⚠️ No Source`)
+- A collapsible **📄 Sources** panel lists the source documents, collection, and heading path used to generate the answer
+- The left sidebar dynamically loads the role's **accessible collections** from `GET /collections/{role}`
+- The Next.js development indicator is disabled via `devIndicators: false` in `frontend/next.config.mjs`
+
+---
+
 ## Notes
 
 - The Qdrant vector DB is stored **locally on disk** — no external Qdrant server required.
 - The first startup takes several minutes as it parses all documents and builds embeddings.
 - To force re-ingestion (e.g. after adding new documents), restart the server — the store always recreates with `force_recreate=True`.
 - CORS is configured to allow only `http://localhost:3000` (the frontend dev server).
+- The SQL RAG fallback is only triggered for `admin` and `billing_executive` roles when the hybrid RAG returns no useful answer.

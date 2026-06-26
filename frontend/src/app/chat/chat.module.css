@@ -156,3 +156,49 @@
     font-size: 18px;
     color: #4a5568;
 }
+
+.retrievalBadge {
+    font-size: 0.7rem;
+    opacity: 0.7;
+    margin-top: 6px;
+    font-style: italic;
+}
+
+.sourcesPanel {
+    margin-top: 10px;
+    font-size: 0.78rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    padding-top: 6px;
+}
+
+.sourcesPanel summary {
+    cursor: pointer;
+    opacity: 0.8;
+    user-select: none;
+}
+
+.sourcesList {
+    list-style: none;
+    padding: 0;
+    margin: 6px 0 0 0;
+}
+
+.sourcesList li {
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.collectionTag {
+    margin-left: 8px;
+    font-size: 0.7rem;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    padding: 1px 5px;
+    text-transform: uppercase;
+}
+
+.sectionPath {
+    opacity: 0.6;
+    font-size: 0.7rem;
+    margin-top: 2px;
+}

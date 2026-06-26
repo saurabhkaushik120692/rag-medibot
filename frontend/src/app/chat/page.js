@@ -54,7 +54,13 @@ export default function ChatPage() {
             });
             const data = await res.json();
 
-            setMessages(prev => [...prev, { sender: "bot", text: data.answer }]);
+            // setMessages(prev => [...prev, { sender: "bot", text: data.answer }]);
+            setMessages(prev => [...prev, {
+                sender: "bot",
+                text: data.answer,
+                sources: data.sources || [],
+                retrieval_type: data.retrieval_type || "hybrid_rag"
+            }]);
         } catch (err) {
             setMessages(prev => [...prev, { sender: "bot", text: "Error connecting to server. Please try again." }]);
         }
@@ -98,9 +104,44 @@ export default function ChatPage() {
                             Ask a question about the {accessibleData.join(", ")} databases.
                         </div>
                     ) : (
+                        // messages.map((msg, i) => (
+                        //     <div key={i} className={msg.sender === "user" ? styles.userRow : styles.botRow}>
+                        //         <div className={styles.bubble}>{msg.text}</div>
+                        //     </div>
+                        // ))
                         messages.map((msg, i) => (
                             <div key={i} className={msg.sender === "user" ? styles.userRow : styles.botRow}>
-                                <div className={styles.bubble}>{msg.text}</div>
+                                <div className={styles.bubble}>
+                                    {msg.text}
+
+                                    {/* Only show for bot messages that have sources */}
+                                    {msg.sender === "bot" && msg.retrieval_type && (
+                                        <div className={styles.retrievalBadge}>
+                                            {msg.retrieval_type === "hybrid_rag" && "🔍 Hybrid RAG"}
+                                            {msg.retrieval_type === "sql_rag" && "🗄️ SQL RAG"}
+                                            {msg.retrieval_type === "none" && "⚠️ No Source"}
+                                        </div>
+                                    )}
+
+                                    {msg.sender === "bot" && msg.sources && msg.sources.length > 0 && (
+                                        <details className={styles.sourcesPanel}>
+                                            <summary>📄 Sources ({msg.sources.length})</summary>
+                                            <ul className={styles.sourcesList}>
+                                                {msg.sources.map((src, j) => (
+                                                    <li key={j}>
+                                                        <strong>{src.source_document}</strong>
+                                                        <span className={styles.collectionTag}>{src.collection}</span>
+                                                        {src.section_title?.length > 0 && (
+                                                            <div className={styles.sectionPath}>
+                                                                {src.section_title.join(" › ")}
+                                                            </div>
+                                                        )}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </details>
+                                    )}
+                                </div>
                             </div>
                         ))
                     )}

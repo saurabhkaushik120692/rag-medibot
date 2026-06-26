@@ -41,6 +41,25 @@ def get_collections(role: str):
         
     return ROLE_ACCESS_MAPPING[role_lower]
 
+# Helper function to build sources list from retrieved documents
+def build_sources(context: list) -> list:
+    """Extract source metadata from retrieved LangChain Documents."""
+    seen = set()
+    sources = []
+    for doc in context:
+        key = (
+            doc.metadata.get("source_document", ""),
+            doc.metadata.get("collection", "")
+        )
+        if key not in seen:              # deduplicate by document + collection
+            seen.add(key)
+            sources.append({
+                "source_document": doc.metadata.get("source_document", ""),
+                "section_title":   doc.metadata.get("section_title", []),
+                "collection":      doc.metadata.get("collection", ""),
+            })
+    return sources
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(request: Request, data: ChatRequest):
     query = data.query
@@ -75,19 +94,33 @@ def chat(request: Request, data: ChatRequest):
             sql_answer = ask_sql(query, results,llm)
             print("[debug] SQL RAG Answer → ", sql_answer)
             if sql_answer:
-                return {"answer": sql_answer}
+                return {
+                    "answer":         sql_answer,
+                    "sources":        [],             # SQL has no doc chunks
+                    "retrieval_type": "sql_rag",
+                    "role":           role,
+                }
 
         accessible_str   = ", ".join(roles_for_user)
         inaccessible_str = ", ".join(sorted(ALL_COLLECTIONS - set(roles_for_user)))
-        fallback = (
-            f"As a {role}, you do not have access to [{inaccessible_str}] documents. "
-            f"I can only answer questions from the {accessible_str} documents."
-        )
-        return {"answer": fallback}
+        if not inaccessible_str:
+            fallback = "I cannot answer your question based on the documents and database available."
+        else:
+            fallback = (
+                f"As a {role}, you do not have access to [{inaccessible_str}] documents. "
+                f"I can only answer questions from the {accessible_str} documents."
+            )
+        return {
+            "answer":         fallback,
+            "sources":        [],
+            "retrieval_type": "none",
+            "role":           role,
+        }
 
-    return answer
-
-    # Connect to your actual RAG chain logic here
-    # mock_answer = f"Hello! As a {role.upper()}, you queried: '{query}'. This is a modular response."
-    # return {"answer": mock_answer}
+    return {
+        "answer":         answer["answer"],
+        "sources":        build_sources(answer["context"]),
+        "retrieval_type": "hybrid_rag",
+        "role":           role,
+    }
     

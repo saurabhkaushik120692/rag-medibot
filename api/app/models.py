@@ -15,5 +15,13 @@ class ChatRequest(BaseModel):
     query: str
     role: str
 
+class SourceItem(BaseModel):
+    source_document: str
+    section_title: List[str]
+    collection: str
+
 class ChatResponse(BaseModel):
     answer: str
+    sources: List[SourceItem] = []
+    retrieval_type: str = "hybrid_rag"
+    role: str = ""
