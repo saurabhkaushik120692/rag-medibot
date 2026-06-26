@@ -18,6 +18,8 @@ A production-style Retrieval-Augmented Generation (RAG) chatbot for **MediAssist
 - [Request Flow](#request-flow)
 - [API Endpoints](#api-endpoints)
 - [RAG Pipeline Details](#rag-pipeline-details)
+- [Screenshots](#screenshots)
+- [Adversarial Prompt Examples](#adversarial-prompt-examples)
 
 ---
 
@@ -518,3 +520,206 @@ Every `/chat` response returns the following fields (defined in `api/app/models.
 - To force re-ingestion (e.g. after adding new documents), restart the server — the store always recreates with `force_recreate=True`.
 - CORS is configured to allow only `http://localhost:3000` (the frontend dev server).
 - The SQL RAG fallback is only triggered for `admin` and `billing_executive` roles when the hybrid RAG returns no useful answer.
+
+---
+
+## Screenshots
+
+### 🔐 Login Screen
+
+![Login Screen](images/logInScreen.png)
+
+The MediAssist Portal login page (`/login`). Users enter their credentials (username + password) to authenticate. On success, the server returns their role which is stored in the browser and used to enforce collection-level access for the rest of the session.
+
+---
+
+### 🏠 Chat Workspace — Doctor Logged In
+
+![Logged In User](images/LoggedInUser.png)
+
+The chat workspace after a doctor (`dr.mehta`) logs in. The left sidebar shows the role badge (**DOCTOR**) and dynamically lists only the accessible database collections — **GENERAL**, **CLINICAL**, and **NURSING**. The chat area prompts the user to ask questions about those specific databases.
+
+---
+
+### 🔍 Hybrid RAG — Doctor Asking Clinical Questions
+
+![Doctor Access](images/DoctorAccess.png)
+
+A doctor session with multiple queries. Clinical questions (hypertension, ICD-10: I10) are answered via **Hybrid RAG** with a `🔍 Hybrid RAG` badge and a collapsible **Sources** panel showing the source document (`treatment_protocols.pdf`), collection (`CLINICAL`), and full heading breadcrumb. The third question ("what is the use of portable x-ray unit equipment") targets the restricted `equipment` collection and returns an `⚠️ No Source` access-denied message.
+
+---
+
+### 🚫 Doctor — Repeated Access Denial for Restricted Collections
+
+![Doctor Role Based Access](images/DoctorRoleBasedAccess.png)
+
+Demonstrates consistent role enforcement across multiple restricted queries. Both "portable x-ray unit equipment" and "autoclave steriliser equipment" (equipment collection) return: *"As a doctor, you do not have access to [billing, equipment] documents."* — each with an `⚠️ No Source` badge. This confirms the Qdrant `metadata.collection` filter is working correctly at query time.
+
+---
+
+### 📊 Admin — SQL RAG + Hybrid RAG in the Same Session
+
+![Admin Hybrid RAG Access](images/AdminHybridRagAccess.png)
+
+An admin session demonstrating both RAG pipelines working together. The first query ("claims for department cardiology submitted before june 2024") triggers the **SQL RAG** pipeline — the LLM generates a SQL `SELECT` query, executes it on the SQLite claims database, and returns a formatted result table with a `🗄️ SQL RAG` badge. The second query ("diagnostic criteria for Hypertension") is answered via **Hybrid RAG** from `treatment_protocols.pdf` with a source citation.
+
+---
+
+### 🗄️ Admin — SQL RAG Close-Up
+
+![Admin SQL RAG Access](images/AdminSQLRAGAccess.png)
+
+Close-up of the SQL RAG response for the admin role. The query returns 5 cardiology claims submitted before June 2024 with their claim IDs, patient names, submission dates, and statuses (1 escalated, 1 approved, 3 rejected). The `🗄️ SQL RAG` badge confirms the retrieval type. No source documents are listed since the answer came from structured database data, not PDF chunks.
+
+---
+
+### 🔎 Admin — SQL Fallback with No Matching Data
+
+![Admin Response With Random Question](images/AdminResponseWithRandomQuestion.png)
+
+Shows the SQL RAG fallback behaving gracefully when a query returns no database records. The admin asks "information about saurabh" — the SQL chain runs but finds no matching employee/claim. The LLM acknowledges this and prompts for more identifying details. The `🗄️ SQL RAG` badge is shown because the SQL pipeline was invoked, even though no data was returned.
+
+---
+
+### 🔧 Technician — Accessing Equipment Collection
+
+![Technician Equipment Access](images/TechnicianEquipmentAccess.png)
+
+A technician (`tech.anand`) logged in with access to only **GENERAL** and **EQUIPMENT** collections. The query "information about the autoclave steriliser equipment" is answered from `equipment_manual.pdf` via Hybrid RAG. The source panel shows the document, collection badge (`EQUIPMENT`), and section path (`Equipment Operation & Maintenance Manual › C. Autoclave Steriliser – SterilPro 3000`), demonstrating that equipment-restricted documents are fully accessible to the technician role.
+
+---
+
+### 🚫 Technician — Access Denied for Clinical and Billing Data
+
+![Technician No Access To Treatment](images/TechnicianNoAccessToTreatment.png)
+
+A technician attempting to access restricted collections. "Diagnostic criteria for hypertension" (clinical) and "autoclave steriliser information" (equipment — allowed) are contrasted: the equipment query is answered but the hypertension query returns *"As a technician, you do not have access to [billing, clinical, nursing] documents."* This illustrates the per-role filtering working symmetrically — same query, different role, different result.
+
+---
+
+### 🔍 Hybrid RAG — Source Citation Panel Detail
+
+![Hybrid Search](images/HybridSearch.png)
+
+Detailed view of the Hybrid RAG source citation feature for a doctor. Two consecutive queries ("diagnostic criteria for hypertension" and "information about ICD-10: I10") both retrieve from `treatment_protocols.pdf` in the clinical collection. Each response bubble shows the collapsible **Sources (1)** panel with the filename, collection tag, and full section breadcrumb, giving full traceability from answer back to the original document section.
+
+---
+
+### 🚫 Technician — SQL and Clinical Queries All Blocked
+
+![Technician SQL RAG Question](images/TechnicianSQLRagQuestion.png)
+
+A complete technician session showing the access control chain end-to-end: the technician first gets a valid equipment answer via Hybrid RAG, then asks "diagnostic criteria for hypertension" (clinical — blocked) and "claims for department cardiology submitted before june 2024" (billing/SQL — blocked). Both return the `⚠️ No Source` access-denied message, confirming that the Qdrant collection filter and the SQL fallback guard both enforce role restrictions correctly.
+
+---
+
+## Adversarial Prompt Examples
+
+These examples demonstrate how the system handles queries that cross role-access boundaries. In each case the user is **authenticated and active** — the enforcement happens silently at the vector retrieval layer, not at login.
+
+---
+
+### Example 1 — Doctor Probing the Equipment Collection
+
+> **Scenario**: A doctor (role: `doctor`, access: `general`, `clinical`, `nursing`) asks about hospital equipment managed exclusively by technicians.
+
+**Request**
+```
+what is the use of portable x-ray unit equipment
+```
+
+**Response**
+```
+As a doctor, you do not have access to [billing, equipment] documents.
+I can only answer questions from the general, clinical, nursing documents.
+```
+
+**Retrieval type:** `⚠️ No Source`
+
+**Why it's blocked**: The `equipment` collection is not in the doctor's `ROLE_ACCESS_MAPPING`. The Qdrant filter (`metadata.collection IN ["general", "clinical", "nursing"]`) returns zero results for equipment queries. The LLM responds with "I don't have that information." which triggers the access-denied fallback.
+
+![Doctor blocked from equipment](images/DoctorRoleBasedAccess.png)
+
+---
+
+### Example 2 — Technician Trying to Access Clinical Treatment Protocols
+
+> **Scenario**: A technician (role: `technician`, access: `general`, `equipment`) asks a clinical question that is only available to doctors, nurses, and admins.
+
+**Request**
+```
+diagnostic criteria for hypertension
+```
+
+**Response**
+```
+As a technician, you do not have access to [billing, clinical, nursing] documents.
+I can only answer questions from the general, equipment documents.
+```
+
+**Retrieval type:** `⚠️ No Source`
+
+**Why it's blocked**: `treatment_protocols.pdf` is stored in the `clinical` collection with `access_roles: ["doctor", "admin", "nurse"]`. The technician's Qdrant filter (`metadata.collection IN ["general", "equipment"]`) excludes it entirely — the document is never even retrieved, so the LLM has no context to answer from.
+
+![Technician blocked from clinical](images/TechnicianNoAccessToTreatment.png)
+
+---
+
+### Example 3 — Technician Probing Billing / SQL Claims Data
+
+> **Scenario**: A technician asks a structured query about hospital claims — a dataset only accessible to `admin` and `billing_executive` roles via the SQL RAG pipeline.
+
+**Request**
+```
+claims for department cardiology submitted before june 2024
+```
+
+**Response**
+```
+As a technician, you do not have access to [billing, clinical, nursing] documents.
+I can only answer questions from the general, equipment documents.
+```
+
+**Retrieval type:** `⚠️ No Source`
+
+**Why it's blocked**: This query fails at two levels:
+1. **Hybrid RAG** — no `billing` or `clinical` documents are retrievable for the technician role (Qdrant filter blocks them).
+2. **SQL RAG fallback** — only invoked for `admin` and `billing_executive`; the technician role never reaches the SQL chain. The fallback message is returned immediately.
+
+![Technician blocked from SQL claims](images/TechnicianSQLRagQuestion.png)
+
+---
+
+### Example 4 — Doctor Asking About Autoclave Steriliser (Equipment)
+
+> **Scenario**: A doctor attempts to retrieve equipment maintenance information that is restricted to technicians and admins.
+
+**Request**
+```
+information about the autoclave steriliser equipment
+```
+
+**Response**
+```
+As a doctor, you do not have access to [billing, equipment] documents.
+I can only answer questions from the general, clinical, nursing documents.
+```
+
+**Retrieval type:** `⚠️ No Source`
+
+**Why it's blocked**: Despite the query being medically plausible for a doctor (autoclaves sterilise surgical instruments), the information lives in `equipment_manual.pdf` which is in the `equipment` collection restricted to `["technician", "admin"]`. The Qdrant filter enforces this regardless of the semantic content of the query — the source collection is the deciding factor, not the topic.
+
+![Doctor blocked from autoclave info](images/DoctorRoleBasedAccess.png)
+
+---
+
+### Adversarial Pattern Summary
+
+| Role | Adversarial Query | Blocked By | Response Type |
+|---|---|---|---|
+| `doctor` | equipment query (x-ray, autoclave) | Qdrant collection filter | `⚠️ No Source` fallback |
+| `technician` | clinical query (hypertension, ICD-10) | Qdrant collection filter | `⚠️ No Source` fallback |
+| `technician` | billing/SQL query (claims data) | Role check before SQL chain | `⚠️ No Source` fallback |
+| `admin` | unknown entity query ("saurabh") | SQL returns empty result | SQL RAG graceful "no records" |
+
+> 💡 **Key design principle**: Enforcement happens at the **retrieval layer** (Qdrant filter), not the response layer. The LLM never sees restricted documents — it cannot be prompted to reveal them even if a user crafts a clever jailbreak query, because the documents are simply absent from the context window.
