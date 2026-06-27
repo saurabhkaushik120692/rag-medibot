@@ -91,16 +91,17 @@ RAG-MediBot/
 │
 ├── rag/                          # RAG pipeline logic
 │   ├── llm.py                    # Groq LLM factory (ChatGroq)
+│   ├── utils.py                  # Shared helpers: intent classifier (is_analytical_question)
 │   ├── hybrid/                   # Hybrid RAG (dense + sparse vector search)
-│   │   ├── embedding_store.py    # Store chunks to Qdrant (dense + BM25 sparse)
+│   │   ├── embedding_store.py    # Store/load chunks to/from Qdrant (dense + BM25 sparse)
 │   │   ├── hybrid_prompt.py      # System prompt for hybrid RAG chain
-│   │   ├── hybrid_retriever.py   # Role-filtered Qdrant retriever
+│   │   ├── hybrid_retriever.py   # access_roles-filtered Qdrant retriever
 │   │   ├── ingestion_chunking.py # PDF/MD parsing with Docling + HierarchicalChunker
 │   │   ├── invoke_llm.py         # Execute hybrid RAG chain, return answer + context
 │   │   └── reranker.py           # Cross-encoder re-ranking (ContextualCompression)
 │   └── sql/                      # SQL RAG for structured/claims data
 │       ├── invoke_llm.py         # Natural language answer from SQL result
-│       ├── sql_chain_cleanup_run.py  # SQL generation + execution via LangChain
+│       ├── sql_chain_cleanup_run.py  # build_sql_rag_chain factory + clean_sql helper
 │       └── sql_prompt.py         # System prompt for SQL answer generation
 │
 ├── frontend/                     # Next.js 16 chat UI
@@ -197,8 +198,9 @@ Copy `sample.env` → `.env` and set the values below. **Never commit `.env`** �
 | `COLLECTION_NAME` | `hybrid_qdrant_medical` | Qdrant collection name |
 | `QDRANT_PATH` | `./db/mediassist_qdrant` | Local path for Qdrant on-disk storage |
 | `DATA_PATH` | `./data` | Root path of the document collections |
-| `CROSS_ENCODER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Re-ranker model |
+| `CROSS_ENCODER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Re-ranker model (configurable, applied at runtime) |
 | `DATABASE_PATH` | `./data/db/mediassist.db` | Path to the SQLite claims database |
+| `FORCE_REINGEST` | `false` | Set to `true` to force re-parsing all PDFs and rebuilding the vector store on next startup |
 
 **sample.env:**
 
@@ -211,6 +213,7 @@ GROQ_MODEL="openai/gpt-oss-20b"
 CROSS_ENCODER_MODEL="cross-encoder/ms-marco-MiniLM-L-6-v2"
 DATABASE_PATH="./data/db/mediassist.db"
 GROQ_KEY=""
+FORCE_REINGEST="false"
 ```
 
 ---
@@ -225,12 +228,16 @@ GROQ_KEY=""
 uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
-On first startup, the app will:
+On **first** startup, the app will:
 1. Parse all PDF/Markdown files in `data/` using Docling
 2. Embed and store chunks into Qdrant at `./db/mediassist_qdrant`
 3. Initialize the Groq LLM and SQL database connection
 
-> 💡 Subsequent restarts re-ingest everything (the current implementation always calls `store_chunks_to_qdrant` with `force_recreate=True`).
+On **subsequent** restarts, the app detects the existing Qdrant collection and **skips re-ingestion**, loading the existing vector store directly. This means restarts take seconds instead of minutes.
+
+> 💡 To force a full re-ingest (e.g. after adding new documents), set `FORCE_REINGEST=true` in `.env` and restart once. Reset it back to `false` afterwards.
+
+> 🗑️ To wipe and rebuild from scratch, delete the `./db/mediassist_qdrant/` folder and restart.
 
 ### Start the Frontend
 
@@ -332,51 +339,52 @@ POST /chat  { query, role }
         ├─ Role valid? → No → 403 Forbidden
         │
         ▼
-  Lookup accessible collections for role
-  (e.g., doctor → ["general", "clinical", "nursing"])
-        │
-        ▼
   ┌─────────────────────────────────────────┐
-  │          HYBRID RAG PIPELINE            │
+  │   STEP 1: INTENT CLASSIFICATION         │
+  │                                         │
+  │  LLM classifies: SQL or DOCUMENT?       │
+  │  (counts, sums, claims, tickets, stats) │
+  └─────────────────────────────────────────┘
+        │
+        ├─ SQL + role is admin/billing_executive?
+        │       │
+        │       ▼
+        │  ┌───────────────────────────────┐
+        │  │        SQL RAG PIPELINE        │
+        │  │                                │
+        │  │  1. LLM generates SQL query    │
+        │  │  2. Clean + execute SQL        │
+        │  │  3. LLM formats result as NL   │
+        │  └───────────────────────────────┘
+        │       │
+        │       └─ → { answer, sources:[], retrieval_type:"sql_rag", role }
+        │
+        └─ DOCUMENT (or non-permitted role)
+                │
+                ▼
+  ┌─────────────────────────────────────────┐
+  │   STEP 2: HYBRID RAG PIPELINE           │
   │                                         │
   │  1. Build Qdrant retriever              │
-  │     Filter: metadata.collection         │
-  │             in roles_for_user           │
+  │     Filter: metadata.access_roles       │
+  │             contains user's role        │
   │                                         │
-  │  2. Retrieve top-10 chunks              │
+  │  2. Retrieve top-5 chunks               │
   │     (dense + sparse hybrid search)      │
   │                                         │
-  │  3. Re-rank top-5 with cross-encoder    │
+  │  3. Re-rank top-3 with cross-encoder    │
   │                                         │
   │  4. LLM generates answer from context   │
   └─────────────────────────────────────────┘
         │
-        ├─ Answer found? → Yes → return enriched response (see /chat response below)
+        ├─ Answer found?
+        │   → { answer, sources, retrieval_type:"hybrid_rag", role }
         │
-        ├─ No answer ("I don't have that information.")
-        │       │
-        │       ├─ Role is admin or billing_executive?
-        │       │       │
-        │       │       ▼
-        │       │  ┌───────────────────────────────┐
-        │       │  │        SQL RAG PIPELINE        │
-        │       │  │                                │
-        │       │  │  1. LLM generates SQL query    │
-        │       │  │  2. Execute SQL on SQLite DB   │
-        │       │  │  3. LLM formats result as NL   │
-        │       │  └───────────────────────────────┘
-        │       │       │
-        │       │       ├─ SQL answer found?
-        │       │       │   → { answer, sources:[], retrieval_type:"sql_rag", role }
-        │       │       │
-        │       │       └─ No → fallback message
-        │       │
-        │       └─ Other roles → fallback message:
-        │              "As a {role}, you do not have access
-        │               to [{inaccessible}] documents..."
-        │              → { answer: fallback, sources:[], retrieval_type:"none", role }
-        │
-        └─ return { answer, sources, retrieval_type:"hybrid_rag", role }
+        └─ No answer / empty context
+               → RBAC fallback message:
+                 "As a {role}, you do not have access
+                  to [{inaccessible}] documents..."
+               → { answer: fallback, sources:[], retrieval_type:"none", role }
 ```
 
 ---
@@ -452,33 +460,40 @@ POST /chat  { query, role }
 1. **Ingestion** (`rag/hybrid/ingestion_chunking.py`)
    - Parses PDFs and Markdown using **Docling** `HierarchicalChunker`
    - Builds full heading breadcrumb for each chunk (`H1 > H2 > H3\n\nContent`)
-   - Stores collection name, source document, access roles, section title, chunk type in metadata
+   - Stores `source_document`, `collection`, `access_roles`, `section_title`, `chunk_type` in metadata per chunk
 
-2. **Embedding** (`rag/hybrid/embedding_store.py`)
+2. **Embedding & Storage** (`rag/hybrid/embedding_store.py`)
    - **Dense**: HuggingFace `all-MiniLM-L6-v2` (semantic understanding)
-   - **Sparse**: FastEmbed BM25 (keyword matching)
-   - Stored in local Qdrant (`RetrievalMode.HYBRID`)
+   - **Sparse**: FastEmbed BM25 `Qdrant/bm25` (keyword matching)
+   - Stored in local Qdrant with `RetrievalMode.HYBRID`
+   - On restart, `collection_exists()` check skips re-ingestion if the collection is already built
 
-3. **Retrieval** (`rag/hybrid/hybrid_retriever.py`)
-   - Qdrant filter: `metadata.collection` must be in the user's allowed collections
-   - Returns top-K hybrid matches
+3. **RBAC Retrieval** (`rag/hybrid/hybrid_retriever.py`)
+   - Qdrant filter: `metadata.access_roles` must **contain** the requesting user's role
+   - This enforces access control at the vector store level — chunks never reach the LLM unless the user's role is in the chunk's stored `access_roles` list
+   - Returns top-5 hybrid (dense + sparse) candidates
 
 4. **Re-ranking** (`rag/hybrid/reranker.py`)
-   - `ContextualCompressionRetriever` with `CrossEncoderReranker`
-   - Model: `cross-encoder/ms-marco-MiniLM-L-6-v2`
-   - Reduces candidates to top-5
+   - `ContextualCompressionRetriever` wrapping `CrossEncoderReranker`
+   - Model configured via `CROSS_ENCODER_MODEL` env var (default: `cross-encoder/ms-marco-MiniLM-L-6-v2`)
+   - Narrows top-5 candidates down to top-3 before passing to LLM
 
 5. **Generation** (`rag/hybrid/invoke_llm.py` + `hybrid_prompt.py`)
    - Groq LLM with system prompt: "Answer using ONLY the provided context. If not in context, say 'I don't have that information.'"
 
 ### SQL RAG (Structured Claims Data)
 
-1. **SQL Generation** (`rag/sql/sql_chain_cleanup_run.py`)
+1. **Intent Classification** (`rag/utils.py`)
+   - Before any retrieval, the LLM classifies whether the question requires a database query (counts, sums, claims, statistics) or a document lookup
+   - Returns `SQL` or `DOCUMENT` — routing happens **before** any vector search
+
+2. **SQL Chain** (`rag/sql/sql_chain_cleanup_run.py`)
+   - `build_sql_rag_chain(llm, db)` factory captures dependencies in a closure and returns a spec-compliant `sql_rag_chain(question: str) -> str` function
    - `create_sql_query_chain` generates a SQL query from natural language
-   - SQL is cleaned (strips markdown fences, `SQLQuery:` prefixes)
+   - `clean_sql()` strips markdown fences and `SQLQuery:` prefixes before execution
    - Query is executed against `mediassist.db`
 
-2. **Answer Generation** (`rag/sql/invoke_llm.py`)
+3. **Answer Generation** (`rag/sql/invoke_llm.py`)
    - Groq LLM formats raw SQL results into a human-readable narrative
 
 ---
@@ -516,10 +531,21 @@ Every `/chat` response returns the following fields (defined in `api/app/models.
 ## Notes
 
 - The Qdrant vector DB is stored **locally on disk** — no external Qdrant server required.
-- The first startup takes several minutes as it parses all documents and builds embeddings.
-- To force re-ingestion (e.g. after adding new documents), restart the server — the store always recreates with `force_recreate=True`.
+- The **first startup** takes several minutes as it parses all documents and builds embeddings.
+- **Subsequent restarts** are fast — the app detects the existing Qdrant collection and skips re-ingestion entirely.
+- To force re-ingestion after adding new documents, set `FORCE_REINGEST=true` in `.env` and restart once.
 - CORS is configured to allow only `http://localhost:3000` (the frontend dev server).
-- The SQL RAG fallback is only triggered for `admin` and `billing_executive` roles when the hybrid RAG returns no useful answer.
+- SQL RAG is only available to `admin` and `billing_executive` roles and is triggered **directly** when the LLM intent classifier identifies an analytical question — not as a fallback after hybrid search.
+- The RBAC filter is applied at the **Qdrant retrieval layer** using `metadata.access_roles` — the LLM never sees chunks for which the user's role is not in the stored `access_roles` list.
+
+---
+
+## Tool Substitutions
+
+| Original Tool (Spec) | Substitution Used | Reason |
+|---|---|---|
+| `HybridChunker` (Docling) | `HierarchicalChunker` (Docling) | `HybridChunker` requires a tokenizer and enforces token-size limits as a second pass. During development, the `HierarchicalChunker` produced cleaner structural splits for the medical PDFs in this dataset without over-fragmenting table rows. The contextualization step (`chunker.contextualize(chunk)`) is preserved in both chunkers, ensuring each chunk's embedded text still carries its parent heading breadcrumb. If token-limit enforcement is critical for a specific deployment, switching back to `HybridChunker` requires only uncommenting the tokenizer setup in `ingestion_chunking.py`. |
+| LLM-only intent classifier | Keyword heuristic (optional, commented out in `rag/utils.py`) | The LLM-based classifier is the default as it handles edge cases better. A fast keyword-based fallback is included (commented out) for latency-sensitive environments. |
 
 ---
 

@@ -1,10 +1,11 @@
 import os
 from rag.llm import llm_groq_agent
 from rag.hybrid.ingestion_chunking import process_data_directory
-from rag.hybrid.embedding_store import store_chunks_to_qdrant
+from rag.hybrid.embedding_store import store_chunks_to_qdrant, collection_exists, load_existing_vectorstore
 from rag.hybrid.hybrid_prompt import generate_prompt
 from langchain_community.utilities import SQLDatabase
 from dotenv import load_dotenv, find_dotenv
+from rag.sql.sql_chain_cleanup_run import build_sql_rag_chain
 
 # load values from .env file
 load_dotenv(find_dotenv())
@@ -17,6 +18,7 @@ DATA_PATH           = os.getenv("DATA_PATH",            "./data")
 GROQ_MODEL          = os.getenv("GROQ_MODEL",           "openai/gpt-oss-20b")
 CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL",  "cross-encoder/ms-marco-MiniLM-L-6-v2")
 DATABASE_PATH       = os.getenv("DATABASE_PATH",        "./data/db/mediassist.db")
+FORCE_REINGEST      = os.getenv("FORCE_REINGEST", "false").lower() == "true"
 
 def initialize_app(app_state: dict):
     """Run all one-time startup initializations and store results in app_state dict."""
@@ -32,19 +34,35 @@ def initialize_app(app_state: dict):
     llm = llm_groq_agent(groq_model=GROQ_MODEL)
     app_state["llm"] = llm
 
-    # process data directory
-    chunks = process_data_directory(data_dir_path=DATA_PATH, embed_model=EMBED_MODEL)
-
-    # store to qdrant
-    vectorstore = store_chunks_to_qdrant(embed_model=EMBED_MODEL, qdrant_path=QDRANT_PATH, collection_name=COLLECTION_NAME, chunks=chunks)
+    if not FORCE_REINGEST and collection_exists(QDRANT_PATH, COLLECTION_NAME):
+        print("[Startup] Existing Qdrant collection found — skipping ingestion.")
+        vectorstore = load_existing_vectorstore(EMBED_MODEL, QDRANT_PATH, COLLECTION_NAME)
+    else:
+        print("[Startup] Building Qdrant collection from scratch — ingesting documents...")
+        chunks = process_data_directory(data_dir_path=DATA_PATH, embed_model=EMBED_MODEL)
+        vectorstore = store_chunks_to_qdrant(
+            embed_model=EMBED_MODEL,
+            qdrant_path=QDRANT_PATH,
+            collection_name=COLLECTION_NAME,
+            chunks=chunks
+        )
     app_state["vectorstore"] = vectorstore
+
+    # # process data directory
+    # chunks = process_data_directory(data_dir_path=DATA_PATH, embed_model=EMBED_MODEL)
+
+    # # store to qdrant
+    # vectorstore = store_chunks_to_qdrant(embed_model=EMBED_MODEL, qdrant_path=QDRANT_PATH, collection_name=COLLECTION_NAME, chunks=chunks)
+    # app_state["vectorstore"] = vectorstore
 
     # hybrid prompt
     hybrid_prompt = generate_prompt()
     app_state["hybrid_prompt"] = hybrid_prompt
+    app_state["cross_encoder_model"] = CROSS_ENCODER_MODEL
 
     # sql database
     db = SQLDatabase.from_uri(f"sqlite:///{DATABASE_PATH}")
-    app_state["sql_db"] = db
+    # app_state["sql_db"] = db
+    app_state["sql_rag_chain"] = build_sql_rag_chain(llm, db)
 
-print("[Startup] All initializations complete.")
+    print("[Startup] All initializations complete.")

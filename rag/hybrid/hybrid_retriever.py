@@ -1,23 +1,22 @@
 from qdrant_client.models import Filter, FieldCondition, MatchAny
 
-# def vector_hybrid_retriever(vectorstore, top_k: int, roles: list):
-#     hybrid_retriever = vectorstore.as_retriever(
-#         search_kwargs={
-#             "k": top_k,       # retrieve top-5 docs
-#             "query_filter": {"must": [{"key": "access_roles", "match": {"any": roles}}]} # e.g., restrict by role
-#         }
-#     )
-#     return hybrid_retriever
+def vector_hybrid_retriever(vectorstore, top_k: int, role: str):
+    """
+    Build a Qdrant-backed hybrid retriever that enforces RBAC at the
+    vector-store level by filtering on the 'access_roles' metadata field.
 
-def vector_hybrid_retriever(vectorstore, top_k: int, roles: list):
+    Each stored chunk carries  metadata.access_roles = ["doctor", "admin", ...]
+    We filter so that only chunks whose access_roles list contains the
+    requesting user's role are ever returned — matching the assignment spec.
+    """
     hybrid_retriever = vectorstore.as_retriever(
         search_kwargs={
             "k": top_k,
             "filter": Filter(
                 must=[
                     FieldCondition(
-                        key="metadata.collection",
-                        match=MatchAny(any=roles)  # roles = e.g. ["general", "clinical", "nursing"]
+                        key="metadata.access_roles",
+                        match=MatchAny(any=[role])  # role = e.g. "doctor"
                     )
                 ]
             )

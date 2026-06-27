@@ -9,13 +9,31 @@ def clean_sql(raw: str) -> str:
         raw = raw.split("SQLQuery:")[-1].strip()
     return raw
 
-def sql_rag_chain(question: str, llm, db):
-    sql_query_chain = create_sql_query_chain(llm, db)
-    raw_sql = sql_query_chain.invoke({"question": question})
-    sql = clean_sql(raw_sql)
-    print(f"[debug] cleaned SQL → {sql}")
+# def sql_rag_chain(question: str, llm, db):
+#     sql_query_chain = create_sql_query_chain(llm, db)
+#     raw_sql = sql_query_chain.invoke({"question": question})
+#     sql = clean_sql(raw_sql)
+#     print(f"[debug] cleaned SQL → {sql}")
 
-    # Step 2: Execute the SQL against the database
-    result = db.run(sql)
-    print(f"[debug] SQL result → {result}")
-    return result
+#     # Step 2: Execute the SQL against the database
+#     result = db.run(sql)
+#     print(f"[debug] SQL result → {result}")
+#     return result
+
+def build_sql_rag_chain(llm, db):
+    """
+    Factory that captures llm and db in a closure and returns a
+    spec-compliant plain function: sql_rag_chain(question: str) -> str
+    """
+    def sql_rag_chain(question: str) -> str:
+        # Step 1: Translate natural language → SQL using LLM
+        sql_query_chain = create_sql_query_chain(llm, db)
+        raw_sql = sql_query_chain.invoke({"question": question})
+        # Step 2: Clean raw LLM output — strip markdown fences, preambles
+        sql = clean_sql(raw_sql)
+        print(f"[debug] cleaned SQL → {sql}")
+        # Step 3: Execute SQL against the database
+        result = db.run(sql)
+        print(f"[debug] SQL result → {result}")
+        return result
+    return sql_rag_chain
