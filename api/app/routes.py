@@ -106,20 +106,6 @@ def chat(request: Request, data: ChatRequest):
     context_empty = not answer["context"]
     llm_has_no_info = NO_INFO_PHRASE.lower() in answer["answer"].lower()
     if context_empty or llm_has_no_info:
-        # # if requestor role is admin or technician then we will call the sql rag as well to get the answer
-        # if role in ["admin", "billing_executive"]:
-        #     # results = sql_rag_chain(query, llm, sql_db)
-        #     results = sql_rag_chain(query)
-        #     sql_answer = ask_sql(query, results,llm)
-        #     print("[debug] SQL RAG Answer → ", sql_answer)
-        #     if sql_answer:
-        #         return {
-        #             "answer":         sql_answer,
-        #             "sources":        [],             # SQL has no doc chunks
-        #             "retrieval_type": "sql_rag",
-        #             "role":           role,
-        #         }
-
         accessible_str   = ", ".join(roles_for_user)
         inaccessible_str = ", ".join(sorted(ALL_COLLECTIONS - set(roles_for_user)))
         if not inaccessible_str:

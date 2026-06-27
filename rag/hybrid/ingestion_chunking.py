@@ -5,8 +5,8 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.chunking import HybridChunker
 from transformers import AutoTokenizer
 from docling.document_converter import DocumentConverter
-from docling_core.transforms.chunker import HierarchicalChunker
-from hierarchical.postprocessor import ResultPostprocessor
+# from docling_core.transforms.chunker import HierarchicalChunker
+# from hierarchical.postprocessor import ResultPostprocessor
 
 # 1. Access Roles Mapping configuration
 ROLE_ACCESS_MAPPING = {
@@ -32,6 +32,7 @@ def determine_chunk_type(chunk) -> str:
         return "heading"
     
     return "text"
+
 def process_data_directory(data_dir_path: str, embed_model: str):
     data_dir = Path(data_dir_path)
     
@@ -44,13 +45,14 @@ def process_data_directory(data_dir_path: str, embed_model: str):
             InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
         }
     )
-    # tokenizer = AutoTokenizer.from_pretrained(embed_model)
-    # chunker = HybridChunker(
-    #                         tokenizer=tokenizer,
-    #                         max_tokens=256,
-    #                         merge_peers=True
-    #                         )
-    chunker   = HierarchicalChunker()
+
+    tokenizer = AutoTokenizer.from_pretrained(embed_model)
+    chunker = HybridChunker(
+                            tokenizer=tokenizer,
+                            max_tokens=256,
+                            merge_peers=True
+                            )
+    # chunker   = HierarchicalChunker()
 
     data = []
     # Supported formats
@@ -75,13 +77,13 @@ def process_data_directory(data_dir_path: str, embed_model: str):
             
             # Convert file using Docling
             try:
-                # result = converter.convert(filepath)
-                # doc = result.document
-
-                converter = DocumentConverter()
                 result = converter.convert(filepath)
-                ResultPostprocessor(result).process()
-                doc=result.document
+                doc = result.document
+
+                # converter = DocumentConverter()
+                # result = converter.convert(filepath)
+                # ResultPostprocessor(result).process()
+                # doc=result.document
 
                 chunks = list(chunker.chunk(doc))
                 

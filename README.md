@@ -136,7 +136,7 @@ RAG-MediBot/
 | **Frontend** | Next.js 16, React 19 |
 | **Backend API** | FastAPI, Uvicorn |
 | **LLM** | Groq (`openai/gpt-oss-20b`) via `langchain-groq` |
-| **Document Parsing** | Docling (`HierarchicalChunker`) |
+| **Document Parsing** | Docling `DocumentConverter` + `HybridChunker` (structure-first → token-aware) |
 | **Dense Embeddings** | HuggingFace `sentence-transformers/all-MiniLM-L6-v2` |
 | **Sparse Embeddings** | FastEmbed BM25 (`Qdrant/bm25`) |
 | **Vector DB** | Qdrant (local on-disk mode) |
@@ -458,8 +458,9 @@ POST /chat  { query, role }
 ### Hybrid RAG (Document Collections)
 
 1. **Ingestion** (`rag/hybrid/ingestion_chunking.py`)
-   - Parses PDFs and Markdown using **Docling** `HierarchicalChunker`
-   - Builds full heading breadcrumb for each chunk (`H1 > H2 > H3\n\nContent`)
+   - Parses PDFs and Markdown using **Docling** `DocumentConverter` with table structure enabled
+   - Chunks using **`HybridChunker`**: structural split first (section → subsection → paragraph/table), then token-aware size limit (`max_tokens=256`, `merge_peers=True`) as a second pass — matching the assignment spec exactly
+   - `chunker.contextualize(chunk)` prepends the full parent heading breadcrumb to each chunk's embedded text (e.g. `H1 > H2 > H3\n\nContent`)
    - Stores `source_document`, `collection`, `access_roles`, `section_title`, `chunk_type` in metadata per chunk
 
 2. **Embedding & Storage** (`rag/hybrid/embedding_store.py`)
@@ -544,7 +545,6 @@ Every `/chat` response returns the following fields (defined in `api/app/models.
 
 | Original Tool (Spec) | Substitution Used | Reason |
 |---|---|---|
-| `HybridChunker` (Docling) | `HierarchicalChunker` (Docling) | `HybridChunker` requires a tokenizer and enforces token-size limits as a second pass. During development, the `HierarchicalChunker` produced cleaner structural splits for the medical PDFs in this dataset without over-fragmenting table rows. The contextualization step (`chunker.contextualize(chunk)`) is preserved in both chunkers, ensuring each chunk's embedded text still carries its parent heading breadcrumb. If token-limit enforcement is critical for a specific deployment, switching back to `HybridChunker` requires only uncommenting the tokenizer setup in `ingestion_chunking.py`. |
 | LLM-only intent classifier | Keyword heuristic (optional, commented out in `rag/utils.py`) | The LLM-based classifier is the default as it handles edge cases better. A fast keyword-based fallback is included (commented out) for latency-sensitive environments. |
 
 ---

@@ -48,13 +48,6 @@ def initialize_app(app_state: dict):
         )
     app_state["vectorstore"] = vectorstore
 
-    # # process data directory
-    # chunks = process_data_directory(data_dir_path=DATA_PATH, embed_model=EMBED_MODEL)
-
-    # # store to qdrant
-    # vectorstore = store_chunks_to_qdrant(embed_model=EMBED_MODEL, qdrant_path=QDRANT_PATH, collection_name=COLLECTION_NAME, chunks=chunks)
-    # app_state["vectorstore"] = vectorstore
-
     # hybrid prompt
     hybrid_prompt = generate_prompt()
     app_state["hybrid_prompt"] = hybrid_prompt
